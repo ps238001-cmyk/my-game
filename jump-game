@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>3Dジャンプアクションゲーム</title>
+<style>
+  body, html {
+    margin: 0; padding: 0; overflow: hidden;
+    font-family: sans-serif;
+    background: #87CEEB;
+    user-select: none;
+  }
+  #gameCanvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    outline: none;
+  }
+  #ui {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    color: #333;
+    z-index: 10;
+  }
+  #coins, #timer {
+    font-size: 18px;
+    margin-right: 15px;
+  }
+  #instructions {
+    position: fixed;
+    top: 40vh;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(255 255 255 / 0.9);
+    padding: 20px 30px;
+    border-radius: 8px;
+    text-align: center;
+    max-width: 320px;
+    z-index: 20;
+    user-select: none;
+  }
+  .control-btn {
+    width: 50px;
+    height: 50px;
+    margin: 5px;
+    border-radius: 8px;
+    background: #eee;
+    border: 2px solid #999;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    user-select: none;
+    font-weight: bold;
+    font-size: 18px;
+  }
+  #controls {
+    position: fixed;
+    bottom: 15px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 15;
+    background: rgba(255 255 255 / 0.8);
+    padding: 10px 15px;
+    border-radius: 10px;
+  }
+  #gameOver {
+    position: fixed;
+    top: 40vh;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(255 255 255 / 0.95);
+    padding: 30px 40px;
+    border-radius: 12px;
+    text-align: center;
+    font-size: 24px;
+    display: none;
+    z-index: 30;
+  }
+  #warning {
+    position: fixed;
+    top: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: red;
+    font-size: 24px;
+    font-weight: bold;
+    display: none;
+    z-index: 25;
+    user-select: none;
+  }
+  #warning.active {
+    display: block;
+    animation: flash 1s infinite alternate;
+  }
+  @keyframes flash {
+    from {opacity: 1;}
+    to {opacity: 0.3;}
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" tabindex="0"></canvas>
+
+<div id="ui">
+  <span>コイン: <span id="coins">0</span></span>
+  <span>タイマー: <span id="timer">60</span></span>
+</div>
+
+<div id="warning">残り時間わずか！⏰</div>
+
+<div id="instructions">
+  <h2>操作方法</h2>
+  <p>WASDキーまたは画面のボタンで移動、スペースキーでジャンプ</p>
+  <p>コインを10個集めてゴールを目指そう！</p>
+  <button id="startBtn">ゲームスタート</button>
+</div>
+
+<div id="controls">
+  <button class="control-btn" data-key="KeyW">↑</button>
+  <button class="control-btn" data-key="KeyA">←</button>
+  <button class="control-btn" data-key="KeyS">↓</button>
+  <button class="control-btn" data-key="KeyD">→</button>
+  <button class="control-btn" data-key="Space">⏫</button>
+  <button class="control-btn" data-view="left">👈</button>
+  <button class="control-btn" data-view="right">👉</button>
+  <button class="control-btn" data-view="up">👆</button>
+  <button class="control-btn" data-view="down">👇</button>
+</div>
+
+<div id="gameOver"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+<script>
+/* ここからあなたのJSコード */
+let scene, camera, renderer;
+let player = {
+    velocity: new THREE.Vector3(),
+    canJump: false,
+    height: 1.8,
+    speed: 0.15,
+    jumpPower: 0.35
+};
+let keys = {};
+let viewRotation = { x: 0, y: 0 };
+let coins = [];
+let coinsCollected = 0;
+let platforms = [];
+let obstacles = [];
+let gameStarted = false;
+let startTime = 0;
+let viewButtonPressed = {};
+let timeLimit = 60;
+let remainingTime = 60;
+
+function init() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87CEEB);
+    scene.fog = new THREE.Fog(0x87CEEB, 0, 100);
+
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, player.height, 0);
+
+    renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gameCanvas'), antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+
+    // ライト
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    dirLight.position.set(10, 20, 10);
+    dirLight.castShadow = true;
+    dirLight.shadow.camera.left = -50;
+    dirLight.shadow.camera.right = 50;
+    dirLight.shadow.camera.top = 50;
+    dirLight.shadow.camera.bottom = -50;
+    scene.add(dirLight);
+
+    createLevel();
+    setupEventListeners();
+}
+
+function createLevel() {
+    // スタート台
+    createPlatform(0, 0, 0, 10, 0.5, 10, 0x4CAF50);
+    
+    // ジャンプ台1
+    createPlatform(12, 1, 0, 6, 0.5, 6, 0xFF9800);
+    createCoin(12, 2.5, 0);
+    
+    // ジャンプ台2
+    createPlatform(20, 2.5, 3, 5, 0.5, 5, 0xFF9800);
+    createCoin(20, 4, 3);
+    
+    // 長い橋
+    createPlatform(28, 3, 0, 10, 0.5, 4, 0x2196F3);
+    createCoin(28, 4.5, 0);
+    createCoin(32, 4.5, 0);
+    createObstacle(30, 5, 0);
+    
+    // 高い台
+    createPlatform(40, 6, 0, 6, 0.5, 6, 0x9C27B0);
+    createCoin(40, 7.5, 0);
+    
+    // 階段状の台
+    createPlatform(48, 7, 0, 4, 0.5, 4, 0xE91E63);
+    createCoin(48, 8.5, 0);
+    
+    createPlatform(54, 8, 0, 4, 0.5, 4, 0xE91E63);
+    createCoin(54, 9.5, 0);
+    createObstacle(56, 10, 0);
+    
+    // ゴール付近
+    createPlatform(62, 9, 0, 8, 0.5, 8, 0xFFEB3B);
+    createCoin(62, 10.5, 0);
+    createCoin(60, 10.5, 2);
+    createCoin(64, 10.5, -2);
+    
+    // 壁(落下防止の目印)
+    const wallGeo = new THREE.BoxGeometry(1, 5, 100);
+    const wallMat = new THREE.MeshLambertMaterial({ color: 0xFF5722, transparent: true, opacity: 0.3 });
+    const wall1 = new THREE.Mesh(wallGeo, wallMat);
+    wall1.position.set(-10, 2.5, 0);
+    scene.add(wall1);
+    const wall2 = new THREE.Mesh(wallGeo, wallMat);
+    wall2.position.set(70, 2.5, 0);
+    scene.add(wall2);
+}
+
+function createPlatform(x, y, z, w, h, d, color) {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const mat = new THREE.MeshLambertMaterial({ color: color });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+    platforms.push({
+        mesh: mesh,
+        box: new THREE.Box3().setFromObject(mesh)
+    });
+}
+
+function createCoin(x, y, z) {
+    const geo = new THREE.CylinderGeometry(0.5, 0.5, 0.1, 16);
+    const mat = new THREE.MeshLambertMaterial({ color: 0xFFD700, emissive: 0xFFD700, emissiveIntensity: 0.5 });
+    const coin = new THREE.Mesh(geo, mat);
+    coin.position.set(x, y, z);
+    coin.rotation.x = Math.PI / 2;
+    scene.add(coin);
+    coins.push(coin);
+}
+
+function createObstacle(x, y, z) {
+    const group = new THREE.Group();
+    
+    // 回転する円柱のバーを作成
+    const barGeo = new THREE.CylinderGeometry(0.3, 0.3, 4, 16);
+    const barMat = new THREE.MeshLambertMaterial({ color: 0xFF4444 });
+    const bar = new THREE.Mesh(barGeo, barMat);
+    bar.rotation.z = Math.PI / 2; // 横向きにする
+    group.add(bar);
+    
+    // 中心の支柱
+    const poleGeo = new THREE.CylinderGeometry(0.15, 0.15, 1, 16);
+    const poleMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+    const pole = new THREE.Mesh(poleGeo, poleMat);
+    pole.position.y = -0.5;
+    group.add(pole);
+    
+    group.position.set(x, y, z);
+    scene.add(group);
+    
+    obstacles.push({
+        mesh: group,
+        startPos: new THREE.Vector3(x, y, z),
+        time: 0
+    });
+}
+
+function setupEventListeners() {
+    // キーボード操作
+    document.addEventListener('keydown', (e) => {
+        keys[e.code] = true;
+        if (e.code === 'Space' && player.canJump) {
+            player.velocity.y = player.jumpPower;
+            player.canJump = false;
+        }
+        e.preventDefault();
+    });
+    document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+    // ボタン操作
+    document.querySelectorAll('.control-btn[data-key]').forEach(btn => {
+        btn.addEventListener('mousedown', () => {
+            const key = btn.dataset.key;
+            keys[key] = true;
+            if (key === 'Space' && player.canJump) {
+                player.velocity.y = player.jumpPower;
+                player.canJump = false;
+            }
+        });
+        btn.addEventListener('mouseup', () => {
+            keys[btn.dataset.key] = false;
+        });
+        btn.addEventListener('mouseleave', () => {
+            keys[btn.dataset.key] = false;
+        });
+        btn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const key = btn.dataset.key;
+            keys[key] = true;
+            if (key === 'Space' && player.canJump) {
+                player.velocity.y = player.jumpPower;
+                player.canJump = false;
+            }
+        });
+        btn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            keys[btn.dataset.key] = false;
+        });
+    });
+
+    // 視点操作ボタン
+    document.querySelectorAll('.control-btn[data-view]').forEach(btn => {
+        btn.addEventListener('mousedown', () => {
+            viewButtonPressed[btn.dataset.view] = true;
+        });
+        btn.addEventListener('mouseup', () => {
+            viewButtonPressed[btn.dataset.view] = false;
+        });
+        btn.addEventListener('mouseleave', () => {
+            viewButtonPressed[btn.dataset.view] = false;
+        });
+        btn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            viewButtonPressed[btn.dataset.view] = true;
+        });
+        btn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            viewButtonPressed[btn.dataset.view] = false;
+        });
+    });
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    document.getElementById('startBtn').addEventListener('click', startGame);
+}
+
+function startGame() {
+    document.getElementById('instructions').style.display = 'none';
+    gameStarted = true;
+    startTime = Date.now();
+    animate();
+}
+
+function updatePlayer() {
+    // 視点操作
+    const viewSpeed = 0.03;
+    if (viewButtonPressed['left']) viewRotation.x += viewSpeed;
+    if (viewButtonPressed['right']) viewRotation.x -= viewSpeed;
+    if (viewButtonPressed['up']) viewRotation.y += viewSpeed;
+    if (viewButtonPressed['down']) viewRotation.y -= viewSpeed;
+    viewRotation.y = Math.max(-Math.PI/3, Math.min(Math.PI/3, viewRotation.y));
+
+    // 障害物の更新
+    obstacles.forEach(obs => {
+        obs.time += 0.05;
+        obs.mesh.rotation.y += 0.03;
+    });
+
+    // 重力
+    player.velocity.y -= 0.01;
+    
+    // 移動
+    const moveDir = new THREE.Vector3();
+    if (keys['KeyW']) moveDir.z -= 1;
+    if (keys['KeyS']) moveDir.z += 1;
+    if (keys['KeyA']) moveDir.x -= 1;
+    if (keys['KeyD']) moveDir.x += 1;
+    
+    if (moveDir.length() > 0) {
+        moveDir.normalize();
+        moveDir.applyAxisAngle(new THREE.Vector3(0, 1, 0), viewRotation.x);
+        moveDir.multiplyScalar(player.speed);
+        player.velocity.x = moveDir.x;
+        player.velocity.z = moveDir.z;
+    } else {
+        player.velocity.x *= 0.8;
+        player.velocity.z *= 0.8;
+    }
+
+    // 位置更新
+    camera.position.add(player.velocity);
+    
+    // 衝
